@@ -78,7 +78,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📋 RegulatoryRAG")
-st.caption("AI Document Q&A for Life Sciences — answers grounded in your document only")
+st.caption("AI Document Q&A — answers grounded in your document only")
 
 
 def get_index(pdf_bytes=None, pdf_name=None):
