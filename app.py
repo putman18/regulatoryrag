@@ -100,25 +100,54 @@ def ask_claude(question: str, chunks: list[dict], pdf_name: str) -> tuple[str, l
     for i, chunk in enumerate(chunks):
         context += f"\n[Source {i+1} — Page {chunk['page']}]\n{chunk['text']}\n"
 
-    prompt = (
-        f"You are a regulatory affairs assistant. Answer the user's question using ONLY "
-        f"the document excerpts provided below. Do not use any outside knowledge.\n\n"
-        f"If the answer is not in the excerpts, say exactly: "
-        f"\"I could not find the answer to that question in this document.\"\n\n"
-        f"At the end of your answer, always cite the specific page numbers you used "
-        f"in this format: (Source: Page X, Page Y)\n\n"
-        f"Document: {pdf_name}\n"
-        f"Excerpts:{context}\n\n"
+    # Log chunks for every query so we can see what Claude actually receives
+    st.session_state.setdefault("last_chunks_debug", [])
+    st.session_state["last_chunks_debug"] = [
+        {"page": c["page"], "preview": c["text"][:200]} for c in chunks
+    ]
+
+    system_prompt = (
+        "You are a regulatory document assistant. Your job is to find and explain "
+        "information from the document excerpts provided to you.\n\n"
+        "RULES — follow these exactly:\n"
+        "1. Read ALL excerpts carefully before answering.\n"
+        "2. The user's question may be informal, vague, or use different words than "
+        "the document — that is fine. Look for the underlying intent and match it to "
+        "relevant content in the excerpts.\n"
+        "3. If an excerpt contains relevant information — even partial — use it. "
+        "Quote or paraphrase the relevant text directly in your answer.\n"
+        "4. Interpret regulatory language: if a document says something is 'prohibited', "
+        "'not permitted', 'shall not', or 'must not' — that means it is NOT allowed. "
+        "Say so clearly in plain English.\n"
+        "5. Only say you cannot find the answer if NONE of the excerpts contain "
+        "anything remotely related to the question after careful reading.\n"
+        "6. End every answer with the page numbers you used: (Source: Page X, Page Y)"
+    )
+
+    user_prompt = (
+        f"Document: {pdf_name}\n\n"
+        f"Excerpts from the document:\n{context}\n\n"
         f"Question: {question}"
     )
 
     client = anthropic.Anthropic()
     resp = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=600,
-        messages=[{"role": "user", "content": prompt}],
+        max_tokens=800,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
     )
-    return resp.content[0].text, chunks
+
+    answer = resp.content[0].text
+
+    # Log a warning in session state if Claude still said cannot find
+    if "could not find" in answer.lower() or "cannot find" in answer.lower():
+        st.session_state["retrieval_miss"] = {
+            "question": question,
+            "chunks": st.session_state["last_chunks_debug"],
+        }
+
+    return answer, chunks
 
 
 # --- Sidebar ---
@@ -191,7 +220,7 @@ if question:
         with st.spinner("Searching document..."):
             try:
                 index = st.session_state.index
-                chunks = retrieve(question, index, top_k=4)
+                chunks = retrieve(question, index, top_k=6)
                 answer, sources = ask_claude(question, chunks, idx.get("pdf_name", ""))
                 st.markdown(answer)
                 pages = sorted(set(c["page"] for c in sources))
@@ -200,6 +229,13 @@ if question:
                     f'<div class="citation">📄 Sources: {page_str} — {idx.get("pdf_name","")}</div>',
                     unsafe_allow_html=True
                 )
+                # Debug expander — shows raw chunks Claude received
+                with st.expander("🔍 Debug: chunks retrieved", expanded=False):
+                    for d in st.session_state.get("last_chunks_debug", []):
+                        st.markdown(f"**Page {d['page']}:** {d['preview']}...")
+                    if st.session_state.get("retrieval_miss"):
+                        st.warning("Claude said 'cannot find' but chunks were retrieved — likely a retrieval or prompt mismatch.")
+
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer,
