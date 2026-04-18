@@ -46,6 +46,11 @@ from ingest import build_index, retrieve, load_index, DEFAULT_PDF, INDEX_PATH, M
 
 MIN_CHARS = 500
 
+@st.cache_resource(show_spinner="Loading embedding model...")
+def load_embedding_model():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
 SAMPLE_QUESTIONS = [
     "What is a Warning Letter and when is it issued?",
     "What are the key components required in a Warning Letter?",
