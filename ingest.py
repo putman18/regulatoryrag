@@ -41,6 +41,7 @@ CHUNK_SIZE = 1500
 OVERLAP_PCT = 0.25
 MIN_CHARS = 500
 RRF_K = 60
+INDEX_VERSION = 2  # bump to invalidate cached indexes
 
 
 def _get_model():
@@ -115,6 +116,7 @@ def build_index(pdf_path: Path) -> dict:
     vectors = model.encode(texts, show_progress_bar=True).tolist()
 
     index = {
+        "version": INDEX_VERSION,
         "pdf_name": pdf_path.name,
         "total_pages": max(p["page"] for p in pages),
         "chunk_count": len(chunks),
@@ -174,7 +176,10 @@ def retrieve(query: str, index: dict, top_k: int = 6) -> list[dict]:
 def load_index() -> dict | None:
     if INDEX_PATH.exists():
         with open(INDEX_PATH, encoding="utf-8") as f:
-            return json.load(f)
+            idx = json.load(f)
+        if idx.get("version") != INDEX_VERSION:
+            return None
+        return idx
     return None
 
 
