@@ -3,3 +3,4 @@ streamlit
 pymupdf
 python-dotenv
 sentence-transformers
+rank-bm25

@@ -37,9 +37,10 @@ except ImportError:
 DEFAULT_PDF = PROJECT_ROOT / "data" / "fda_guidance.pdf"
 INDEX_PATH = Path(tempfile.gettempdir()) / "regulatory_qa_index.json"
 
-CHUNK_SIZE = 800
-OVERLAP_PCT = 0.15
+CHUNK_SIZE = 1500
+OVERLAP_PCT = 0.25
 MIN_CHARS = 500
+RRF_K = 60
 
 
 def _get_model():
@@ -131,17 +132,43 @@ def build_index(pdf_path: Path) -> dict:
     return index
 
 
+def _tokenize(text: str) -> list[str]:
+    import re
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
 def retrieve(query: str, index: dict, top_k: int = 6) -> list[dict]:
-    """Retrieve top_k semantically similar chunks for a query."""
+    """Hybrid retrieval: BM25 (keywords) + semantic (meaning), fused via RRF."""
+    from rank_bm25 import BM25Okapi
+
+    chunks = index["chunks"]
+    n = len(chunks)
+    pool = min(top_k * 4, n)
+
+    # Semantic ranking
     model = _get_model()
     query_vec = model.encode([query])[0].tolist()
+    sem_scored = sorted(
+        range(n),
+        key=lambda i: cosine_similarity(query_vec, chunks[i]["vector"]),
+        reverse=True,
+    )[:pool]
 
-    scored = [
-        (cosine_similarity(query_vec, chunk["vector"]), chunk)
-        for chunk in index["chunks"]
-    ]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [chunk for _, chunk in scored[:top_k]]
+    # BM25 ranking
+    corpus_tokens = [_tokenize(c["text"]) for c in chunks]
+    bm25 = BM25Okapi(corpus_tokens)
+    bm_scores = bm25.get_scores(_tokenize(query))
+    bm_scored = sorted(range(n), key=lambda i: bm_scores[i], reverse=True)[:pool]
+
+    # Reciprocal Rank Fusion
+    rrf = {}
+    for rank, idx in enumerate(sem_scored):
+        rrf[idx] = rrf.get(idx, 0) + 1 / (RRF_K + rank)
+    for rank, idx in enumerate(bm_scored):
+        rrf[idx] = rrf.get(idx, 0) + 1 / (RRF_K + rank)
+
+    top = sorted(rrf.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    return [chunks[i] for i, _ in top]
 
 
 def load_index() -> dict | None:
